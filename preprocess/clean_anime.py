@@ -10,6 +10,41 @@ import pandas as pd
 PREPROCESS_DIR = Path(__file__).resolve().parent
 RAW_CSV_PATH = PREPROCESS_DIR / "data" / "raw" / "AnimeList.csv"
 CLEANED_CSV_PATH = PREPROCESS_DIR / "data" / "cleaned" / "anime_cleaned.csv"
+TARGET_COLUMNS = [
+    "anime_id",
+    "title",
+    "title_english",
+    "title_japanese",
+    "title_synonyms",
+    "image_url",
+    "type",
+    "source",
+    "episodes",
+    "status",
+    "airing",
+    "aired_string",
+    "aired",
+    "duration",
+    "rating",
+    "score",
+    "scored_by",
+    "rank",
+    "popularity",
+    "members",
+    "favorites",
+    "background",
+    "premiered",
+    "broadcast",
+    "related",
+    "producer",
+    "licensor",
+    "studio",
+    "genre",
+    "opening_theme",
+    "ending_theme",
+    "duration_min",
+    "aired_from_year",
+]
 NUMERIC_NAME_HINTS = (
     "_id",
     "episode",
@@ -101,6 +136,45 @@ def coerce_numeric_columns(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, list[
     return cleaned, converted_columns
 
 
+def add_schema_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Add conservative derived columns needed by the target output schema."""
+    cleaned = dataframe.copy()
+
+    if "duration_min" not in cleaned.columns:
+        if "duration" in cleaned.columns:
+            duration_values = cleaned["duration"].astype("string").str.extract(r"(\d+)\s*min")[0]
+        else:
+            duration_values = pd.Series(pd.NA, index=cleaned.index, dtype="object")
+        cleaned["duration_min"] = pd.to_numeric(duration_values, errors="coerce")
+
+    if "aired_from_year" not in cleaned.columns:
+        if "aired" in cleaned.columns:
+            aired_year = cleaned["aired"].astype("string").str.extract(r"(\d{4})")[0]
+        else:
+            aired_year = pd.Series(pd.NA, index=cleaned.index, dtype="object")
+
+        if "aired_string" in cleaned.columns:
+            aired_string_year = cleaned["aired_string"].astype("string").str.extract(r"(\d{4})")[0]
+        else:
+            aired_string_year = pd.Series(pd.NA, index=cleaned.index, dtype="object")
+
+        cleaned["aired_from_year"] = pd.to_numeric(
+            aired_year.fillna(aired_string_year),
+            errors="coerce",
+        )
+
+    return cleaned
+
+
+def validate_and_select_target_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Validate the final schema and return only the target columns in order."""
+    missing = [column for column in TARGET_COLUMNS if column not in dataframe.columns]
+    if missing:
+        raise ValueError(f"Missing required columns for final output: {missing}")
+
+    return dataframe[TARGET_COLUMNS]
+
+
 def print_summary(
     dataframe: pd.DataFrame,
     original_shape: tuple[int, int],
@@ -140,6 +214,8 @@ def main() -> None:
     anime_df, exact_duplicates_removed = remove_duplicate_rows(anime_df)
     anime_df, anime_id_duplicates_removed = remove_duplicate_anime_ids(anime_df)
     anime_df, converted_columns = coerce_numeric_columns(anime_df)
+    anime_df = add_schema_columns(anime_df)
+    anime_df = validate_and_select_target_columns(anime_df)
 
     anime_df.to_csv(CLEANED_CSV_PATH, index=False)
 

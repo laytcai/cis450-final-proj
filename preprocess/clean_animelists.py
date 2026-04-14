@@ -13,6 +13,19 @@ PREPROCESS_DIR = Path(__file__).resolve().parent
 RAW_CSV_PATH = PREPROCESS_DIR / "data" / "raw" / "UserAnimeList.csv"
 ANIME_CLEANED_PATH = PREPROCESS_DIR / "data" / "cleaned" / "anime_cleaned.csv"
 OUTPUT_CSV_PATH = PREPROCESS_DIR / "data" / "cleaned" / "animelists_cleaned.csv"
+TARGET_COLUMNS = [
+    "username",
+    "anime_id",
+    "my_watched_episodes",
+    "my_start_date",
+    "my_finish_date",
+    "my_score",
+    "my_status",
+    "my_rewatching",
+    "my_rewatching_ep",
+    "my_last_updated",
+    "my_tags",
+]
 CHUNK_SIZE = 100_000
 MISSING_SENTINEL = "<NA>"
 NUMERIC_NAME_HINTS = (
@@ -227,9 +240,18 @@ def fix_episode_inconsistencies(
     return cleaned, fixed_count
 
 
-def write_empty_output(column_names: list[str]) -> None:
-    """Write an empty CSV with headers if no rows survive cleaning."""
-    pd.DataFrame(columns=column_names).to_csv(OUTPUT_CSV_PATH, index=False)
+def validate_and_select_target_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Validate the final schema and return only the target columns in order."""
+    missing = [column for column in TARGET_COLUMNS if column not in dataframe.columns]
+    if missing:
+        raise ValueError(f"Missing required columns for final output: {missing}")
+
+    return dataframe[TARGET_COLUMNS]
+
+
+def write_empty_output() -> None:
+    """Write an empty CSV with the exact target schema."""
+    pd.DataFrame(columns=TARGET_COLUMNS).to_csv(OUTPUT_CSV_PATH, index=False)
 
 
 def print_summary(
@@ -263,6 +285,10 @@ def main() -> None:
     if "anime_id" not in raw_columns:
         raise SystemExit("Error: Expected `anime_id` in UserAnimeList.csv.")
 
+    missing_target_columns = [column for column in TARGET_COLUMNS if column not in raw_columns]
+    if missing_target_columns:
+        raise ValueError(f"Missing required columns for final output: {missing_target_columns}")
+
     user_key_column = find_user_key_column(raw_columns)
     watched_episodes_column = find_watched_episodes_column(raw_columns)
 
@@ -274,8 +300,7 @@ def main() -> None:
     final_row_count = 0
     duplicates_removed = 0
     episode_rows_fixed = 0
-    missing_counts: pd.Series | None = None
-    output_columns: list[str] | None = None
+    missing_counts = pd.Series(0, index=TARGET_COLUMNS, dtype="int64")
     wrote_header = False
 
     try:
@@ -318,13 +343,9 @@ def main() -> None:
             chunk, fixed_count = fix_episode_inconsistencies(chunk, watched_episodes_column)
             episode_rows_fixed += fixed_count
 
-            if output_columns is None:
-                output_columns = list(chunk.columns)
-                missing_counts = pd.Series(0, index=output_columns, dtype="int64")
-
-            chunk = chunk.reindex(columns=output_columns)
+            chunk = validate_and_select_target_columns(chunk)
             missing_counts = missing_counts.add(
-                chunk.isna().sum().reindex(output_columns, fill_value=0),
+                chunk.isna().sum().reindex(TARGET_COLUMNS, fill_value=0),
                 fill_value=0,
             ).astype("int64")
 
@@ -339,16 +360,12 @@ def main() -> None:
     finally:
         duplicate_tracker.close()
 
-    if output_columns is None:
-        output_columns = raw_columns.copy()
-        if "episodes" not in output_columns:
-            output_columns.append("episodes")
-        missing_counts = pd.Series(0, index=output_columns, dtype="int64")
-        write_empty_output(output_columns)
+    if not wrote_header:
+        write_empty_output()
 
     print_summary(
         original_shape=(original_row_count, len(raw_columns)),
-        final_shape=(final_row_count, len(output_columns)),
+        final_shape=(final_row_count, len(TARGET_COLUMNS)),
         duplicates_removed=duplicates_removed,
         episode_rows_fixed=episode_rows_fixed,
         missing_counts=missing_counts,

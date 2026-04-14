@@ -12,6 +12,25 @@ PREPROCESS_DIR = Path(__file__).resolve().parent
 RAW_USERS_PATH = PREPROCESS_DIR / "data" / "raw" / "UserList.csv"
 ANIMELISTS_CLEANED_PATH = PREPROCESS_DIR / "data" / "cleaned" / "animelists_cleaned.csv"
 OUTPUT_USERS_PATH = PREPROCESS_DIR / "data" / "cleaned" / "users_cleaned.csv"
+TARGET_COLUMNS = [
+    "username",
+    "user_id",
+    "user_watching",
+    "user_completed",
+    "user_onhold",
+    "user_dropped",
+    "user_plantowatch",
+    "user_days_spent_watching",
+    "gender",
+    "location",
+    "birth_date",
+    "access_rank",
+    "join_date",
+    "last_online",
+    "stats_mean_score",
+    "stats_rewatched",
+    "stats_episodes",
+]
 ANIMELISTS_CHUNK_SIZE = 100_000
 
 USER_NUMERIC_COLUMNS = (
@@ -238,6 +257,15 @@ def add_difference_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
+def validate_and_select_target_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Validate the final schema and return only the target columns in order."""
+    missing = [column for column in TARGET_COLUMNS if column not in dataframe.columns]
+    if missing:
+        raise ValueError(f"Missing required columns for final output: {missing}")
+
+    return dataframe[TARGET_COLUMNS]
+
+
 def print_summary(
     dataframe: pd.DataFrame,
     original_shape: tuple[int, int],
@@ -306,10 +334,11 @@ def main() -> None:
         else 0
     )
 
-    user_df.to_csv(OUTPUT_USERS_PATH, index=False)
+    final_user_df = validate_and_select_target_columns(user_df)
+    final_user_df.to_csv(OUTPUT_USERS_PATH, index=False)
 
     print_summary(
-        user_df,
+        final_user_df,
         original_shape=original_shape,
         duplicate_rows_removed=duplicate_rows_removed,
         duplicate_user_id_rows_removed=duplicate_user_id_rows_removed,
