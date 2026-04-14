@@ -81,22 +81,332 @@ CREATE TABLE raw_user_anime_list (
 
 # Step 4: create the final normalized schema
 str4 = """
+DROP TABLE IF EXISTS anime_licensors;
+DROP TABLE IF EXISTS anime_producers;
+DROP TABLE IF EXISTS anime_studios;
+DROP TABLE IF EXISTS anime_genres;
+DROP TABLE IF EXISTS user_anime_list;
+DROP TABLE IF EXISTS anime_list_status;
+DROP TABLE IF EXISTS licensors;
+DROP TABLE IF EXISTS producers;
+DROP TABLE IF EXISTS studios;
+DROP TABLE IF EXISTS genres;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS anime;
+
+CREATE TABLE anime (
+    anime_id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    title_english TEXT,
+    title_japanese TEXT,
+    title_synonyms TEXT,
+    image_url TEXT,
+    type VARCHAR(50),
+    source VARCHAR(100),
+    episodes INTEGER CHECK (episodes >= 0),
+    status VARCHAR(100),
+    airing BOOLEAN,
+    aired_string TEXT,
+    aired TEXT,
+    duration VARCHAR(100),
+    duration_min NUMERIC(8,2),
+    aired_from_year INTEGER,
+    rating VARCHAR(100),
+    score NUMERIC(4,2) CHECK (score BETWEEN 0 AND 10),
+    scored_by INTEGER CHECK (scored_by >= 0),
+    rank INTEGER,
+    popularity INTEGER,
+    members INTEGER,
+    favorites INTEGER,
+    background TEXT,
+    premiered VARCHAR(100),
+    broadcast VARCHAR(200),
+    related TEXT,
+    opening_theme TEXT,
+    ending_theme TEXT
+);
+
+CREATE TABLE users (
+    user_id INTEGER PRIMARY KEY,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    user_watching INTEGER DEFAULT 0,
+    user_completed INTEGER DEFAULT 0,
+    user_onhold INTEGER DEFAULT 0,
+    user_dropped INTEGER DEFAULT 0,
+    user_plantowatch INTEGER DEFAULT 0,
+    user_days_spent_watching NUMERIC(12,4),
+    gender VARCHAR(50),
+    location TEXT,
+    birth_date DATE,
+    access_rank NUMERIC(10,2),
+    join_date DATE,
+    last_online TIMESTAMP,
+    stats_mean_score NUMERIC(4,2),
+    stats_rewatched INTEGER DEFAULT 0,
+    stats_episodes INTEGER DEFAULT 0
+);
+
+CREATE TABLE anime_list_status (
+    status_id SMALLINT PRIMARY KEY,
+    status_name VARCHAR(50) UNIQUE NOT NULL
+);
+
+CREATE TABLE user_anime_list (
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    anime_id INTEGER NOT NULL REFERENCES anime(anime_id) ON DELETE CASCADE,
+    my_watched_episodes INTEGER DEFAULT 0 CHECK (my_watched_episodes >= 0),
+    my_start_date DATE,
+    my_finish_date DATE,
+    my_score NUMERIC(4,2) CHECK (my_score BETWEEN 0 AND 10),
+    status_id SMALLINT REFERENCES anime_list_status(status_id),
+    my_rewatching BOOLEAN,
+    my_rewatching_ep INTEGER DEFAULT 0 CHECK (my_rewatching_ep >= 0),
+    my_last_updated TIMESTAMP,
+    PRIMARY KEY (user_id, anime_id)
+);
+
+CREATE TABLE genres (
+    genre_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    genre_name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE studios (
+    studio_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    studio_name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE producers (
+    producer_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    producer_name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE licensors (
+    licensor_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    licensor_name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE anime_genres (
+    anime_id INTEGER NOT NULL REFERENCES anime(anime_id) ON DELETE CASCADE,
+    genre_id INTEGER NOT NULL REFERENCES genres(genre_id) ON DELETE CASCADE,
+    PRIMARY KEY (anime_id, genre_id)
+);
+
+CREATE TABLE anime_studios (
+    anime_id INTEGER NOT NULL REFERENCES anime(anime_id) ON DELETE CASCADE,
+    studio_id INTEGER NOT NULL REFERENCES studios(studio_id) ON DELETE CASCADE,
+    PRIMARY KEY (anime_id, studio_id)
+);
+
+CREATE TABLE anime_producers (
+    anime_id INTEGER NOT NULL REFERENCES anime(anime_id) ON DELETE CASCADE,
+    producer_id INTEGER NOT NULL REFERENCES producers(producer_id) ON DELETE CASCADE,
+    PRIMARY KEY (anime_id, producer_id)
+);
+
+CREATE TABLE anime_licensors (
+    anime_id INTEGER NOT NULL REFERENCES anime(anime_id) ON DELETE CASCADE,
+    licensor_id INTEGER NOT NULL REFERENCES licensors(licensor_id) ON DELETE CASCADE,
+    PRIMARY KEY (anime_id, licensor_id)
+);
+"""
+
+# Step 5: populate the final tables from the raw tables
+str5 = """
+-- =========================================================
+-- STEP 5: Populate final tables from raw CSV-import tables
+-- Safe against bad dates like 2010-01-00 / 0000-12-09
+-- =========================================================
+
+BEGIN;
+
+-- ---------------------------------------------------------
+-- 0) Clear final tables so this is rerunnable
+-- ---------------------------------------------------------
+TRUNCATE TABLE
+    anime_licensors,
+    anime_producers,
+    anime_studios,
+    anime_genres,
+    user_anime_list,
+    licensors,
+    producers,
+    studios,
+    genres,
+    anime_list_status,
+    users,
+    anime
+RESTART IDENTITY CASCADE;
+
+-- ---------------------------------------------------------
+-- 1) Helper parsing functions
+-- ---------------------------------------------------------
+CREATE OR REPLACE FUNCTION safe_numeric(txt TEXT)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    s TEXT;
+BEGIN
+    s := NULLIF(BTRIM(txt), '');
+    IF s IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN s::NUMERIC;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION safe_int(txt TEXT)
+RETURNS INTEGER
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    s TEXT;
+BEGIN
+    s := NULLIF(BTRIM(txt), '');
+    IF s IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN TRUNC(s::NUMERIC)::INTEGER;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION safe_bool(txt TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    s TEXT;
+BEGIN
+    s := LOWER(NULLIF(BTRIM(txt), ''));
+    IF s IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    IF s IN ('1', 't', 'true', 'y', 'yes') THEN
+        RETURN TRUE;
+    ELSIF s IN ('0', 'f', 'false', 'n', 'no') THEN
+        RETURN FALSE;
+    ELSE
+        RETURN NULL;
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION safe_date(txt TEXT)
+RETURNS DATE
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    s TEXT;
+BEGIN
+    s := NULLIF(BTRIM(txt), '');
+    IF s IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- require exact yyyy-mm-dd
+    IF s !~ '^\d{4}-\d{2}-\d{2}$' THEN
+        RETURN NULL;
+    END IF;
+
+    -- reject fake year/month/day zeros
+    IF SUBSTRING(s, 1, 4) = '0000'
+       OR SUBSTRING(s, 6, 2) = '00'
+       OR SUBSTRING(s, 9, 2) = '00' THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN s::DATE;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION safe_timestamp(txt TEXT)
+RETURNS TIMESTAMP
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    s TEXT;
+BEGIN
+    s := NULLIF(BTRIM(txt), '');
+    IF s IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    -- reject year 0000 and month/day zero for leading date part
+    IF LENGTH(s) >= 10 THEN
+        IF SUBSTRING(s, 1, 4) = '0000'
+           OR SUBSTRING(s, 6, 2) = '00'
+           OR SUBSTRING(s, 9, 2) = '00' THEN
+            RETURN NULL;
+        END IF;
+    END IF;
+
+    RETURN s::TIMESTAMP;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$;
+
+-- ---------------------------------------------------------
+-- 2) Status lookup table
+-- ---------------------------------------------------------
 INSERT INTO anime_list_status (status_id, status_name) VALUES
     (1, 'watching'),
     (2, 'completed'),
     (3, 'on_hold'),
     (4, 'dropped'),
-    (6, 'plan_to_watch');
+    (6, 'plan_to_watch')
+ON CONFLICT (status_id) DO NOTHING;
 
+-- ---------------------------------------------------------
+-- 3) Anime table
+-- ---------------------------------------------------------
 INSERT INTO anime (
-    anime_id, title, title_english, title_japanese, title_synonyms, image_url,
-    type, source, episodes, status, airing, aired_string, aired, duration,
-    duration_min, aired_from_year, rating, score, scored_by, rank, popularity,
-    members, favorites, background, premiered, broadcast, related,
-    opening_theme, ending_theme
+    anime_id,
+    title,
+    title_english,
+    title_japanese,
+    title_synonyms,
+    image_url,
+    type,
+    source,
+    episodes,
+    status,
+    airing,
+    aired_string,
+    aired,
+    duration,
+    duration_min,
+    aired_from_year,
+    rating,
+    score,
+    scored_by,
+    rank,
+    popularity,
+    members,
+    favorites,
+    background,
+    premiered,
+    broadcast,
+    related,
+    opening_theme,
+    ending_theme
 )
 SELECT
-    NULLIF(BTRIM(anime_id), '')::INTEGER,
+    safe_int(anime_id),
     NULLIF(BTRIM(title), ''),
     NULLIF(BTRIM(title_english), ''),
     NULLIF(BTRIM(title_japanese), ''),
@@ -104,135 +414,121 @@ SELECT
     NULLIF(BTRIM(image_url), ''),
     NULLIF(BTRIM(type), ''),
     NULLIF(BTRIM(source), ''),
-    NULLIF(BTRIM(episodes), '')::INTEGER,
+    safe_int(episodes),
     NULLIF(BTRIM(status), ''),
-    CASE
-        WHEN NULLIF(BTRIM(airing), '') IS NULL THEN NULL
-        ELSE NULLIF(BTRIM(airing), '')::BOOLEAN
-    END,
+    safe_bool(airing),
     NULLIF(BTRIM(aired_string), ''),
     NULLIF(BTRIM(aired), ''),
     NULLIF(BTRIM(duration), ''),
-    NULLIF(BTRIM(duration_min), '')::NUMERIC(8,2),
-    NULLIF(BTRIM(aired_from_year), '')::NUMERIC::INTEGER,
+    safe_numeric(duration_min)::NUMERIC(8,2),
+    safe_int(aired_from_year),
     NULLIF(BTRIM(rating), ''),
-    NULLIF(BTRIM(score), '')::NUMERIC(4,2),
-    NULLIF(BTRIM(scored_by), '')::INTEGER,
-    NULLIF(BTRIM(rank), '')::NUMERIC::INTEGER,
-    NULLIF(BTRIM(popularity), '')::INTEGER,
-    NULLIF(BTRIM(members), '')::INTEGER,
-    NULLIF(BTRIM(favorites), '')::INTEGER,
+    safe_numeric(score)::NUMERIC(4,2),
+    safe_int(scored_by),
+    safe_int(rank),
+    safe_int(popularity),
+    safe_int(members),
+    safe_int(favorites),
     NULLIF(BTRIM(background), ''),
     NULLIF(BTRIM(premiered), ''),
     NULLIF(BTRIM(broadcast), ''),
     NULLIF(BTRIM(related), ''),
     NULLIF(BTRIM(opening_theme), ''),
     NULLIF(BTRIM(ending_theme), '')
-FROM raw_anime;
+FROM raw_anime
+WHERE safe_int(anime_id) IS NOT NULL;
 
+-- ---------------------------------------------------------
+-- 4) Users table
+-- ---------------------------------------------------------
 INSERT INTO users (
-    user_id, username, user_watching, user_completed, user_onhold, user_dropped,
-    user_plantowatch, user_days_spent_watching, gender, location, birth_date,
-    access_rank, join_date, last_online, stats_mean_score, stats_rewatched,
+    user_id,
+    username,
+    user_watching,
+    user_completed,
+    user_onhold,
+    user_dropped,
+    user_plantowatch,
+    user_days_spent_watching,
+    gender,
+    location,
+    birth_date,
+    access_rank,
+    join_date,
+    last_online,
+    stats_mean_score,
+    stats_rewatched,
     stats_episodes
 )
 SELECT
-    NULLIF(BTRIM(user_id), '')::INTEGER,
+    safe_int(user_id),
     NULLIF(BTRIM(username), ''),
-    COALESCE(NULLIF(BTRIM(user_watching), '')::INTEGER, 0),
-    COALESCE(NULLIF(BTRIM(user_completed), '')::INTEGER, 0),
-    COALESCE(NULLIF(BTRIM(user_onhold), '')::INTEGER, 0),
-    COALESCE(NULLIF(BTRIM(user_dropped), '')::INTEGER, 0),
-    COALESCE(NULLIF(BTRIM(user_plantowatch), '')::INTEGER, 0),
-    NULLIF(BTRIM(user_days_spent_watching), '')::NUMERIC(12,4),
+    COALESCE(safe_int(user_watching), 0),
+    COALESCE(safe_int(user_completed), 0),
+    COALESCE(safe_int(user_onhold), 0),
+    COALESCE(safe_int(user_dropped), 0),
+    COALESCE(safe_int(user_plantowatch), 0),
+    safe_numeric(user_days_spent_watching)::NUMERIC(12,4),
     NULLIF(BTRIM(gender), ''),
     NULLIF(BTRIM(location), ''),
-    CASE
-        WHEN BTRIM(COALESCE(birth_date, '')) ~ '^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$'
-         AND SUBSTRING(BTRIM(birth_date), 6, 2) <> '00'
-         AND SUBSTRING(BTRIM(birth_date), 9, 2) <> '00'
-        THEN BTRIM(birth_date)::TIMESTAMP::DATE
-        ELSE NULL
-    END,
-    NULLIF(BTRIM(access_rank), '')::NUMERIC(10,2),
-    CASE
-        WHEN BTRIM(COALESCE(join_date, '')) ~ '^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$'
-         AND SUBSTRING(BTRIM(join_date), 6, 2) <> '00'
-         AND SUBSTRING(BTRIM(join_date), 9, 2) <> '00'
-        THEN BTRIM(join_date)::TIMESTAMP::DATE
-        ELSE NULL
-    END,
-    CASE
-        WHEN BTRIM(COALESCE(last_online, '')) ~ '^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$'
-         AND SUBSTRING(BTRIM(last_online), 6, 2) <> '00'
-         AND SUBSTRING(BTRIM(last_online), 9, 2) <> '00'
-        THEN BTRIM(last_online)::TIMESTAMP
-        ELSE NULL
-    END,
-    NULLIF(BTRIM(stats_mean_score), '')::NUMERIC(4,2),
-    COALESCE(NULLIF(BTRIM(stats_rewatched), '')::NUMERIC::INTEGER, 0),
-    COALESCE(NULLIF(BTRIM(stats_episodes), '')::INTEGER, 0)
-FROM raw_users;
+    safe_date(birth_date),
+    safe_numeric(access_rank)::NUMERIC(10,2),
+    safe_date(join_date),
+    safe_timestamp(last_online),
+    safe_numeric(stats_mean_score)::NUMERIC(4,2),
+    COALESCE(safe_int(stats_rewatched), 0),
+    COALESCE(safe_int(stats_episodes), 0)
+FROM raw_users
+WHERE safe_int(user_id) IS NOT NULL
+  AND NULLIF(BTRIM(username), '') IS NOT NULL;
 
+-- ---------------------------------------------------------
+-- 5) User-anime interaction table
+-- Keep only the latest row per (user_id, anime_id)
+-- ---------------------------------------------------------
 INSERT INTO user_anime_list (
-    user_id, anime_id, my_watched_episodes, my_start_date, my_finish_date,
-    my_score, status_id, my_rewatching, my_rewatching_ep, my_last_updated
+    user_id,
+    anime_id,
+    my_watched_episodes,
+    my_start_date,
+    my_finish_date,
+    my_score,
+    status_id,
+    my_rewatching,
+    my_rewatching_ep,
+    my_last_updated
 )
 SELECT DISTINCT ON (u.user_id, a.anime_id)
     u.user_id,
     a.anime_id,
-    COALESCE(NULLIF(BTRIM(r.my_watched_episodes), '')::INTEGER, 0),
-
+    COALESCE(safe_int(r.my_watched_episodes), 0),
+    safe_date(r.my_start_date),
+    safe_date(r.my_finish_date),
     CASE
-        WHEN BTRIM(COALESCE(r.my_start_date, '')) ~ '^\d{4}-\d{2}-\d{2}$'
-         AND SUBSTRING(BTRIM(r.my_start_date), 6, 2) <> '00'
-         AND SUBSTRING(BTRIM(r.my_start_date), 9, 2) <> '00'
-        THEN BTRIM(r.my_start_date)::DATE
+        WHEN safe_numeric(r.my_score) IS NULL THEN NULL
+        WHEN safe_numeric(r.my_score) = 0 THEN NULL
+        ELSE safe_numeric(r.my_score)::NUMERIC(4,2)
+    END,
+    CASE
+        WHEN safe_int(r.my_status) IN (1, 2, 3, 4, 6) THEN safe_int(r.my_status)::SMALLINT
         ELSE NULL
     END,
-
-    CASE
-        WHEN BTRIM(COALESCE(r.my_finish_date, '')) ~ '^\d{4}-\d{2}-\d{2}$'
-         AND SUBSTRING(BTRIM(r.my_finish_date), 6, 2) <> '00'
-         AND SUBSTRING(BTRIM(r.my_finish_date), 9, 2) <> '00'
-        THEN BTRIM(r.my_finish_date)::DATE
-        ELSE NULL
-    END,
-
-    NULLIF(NULLIF(BTRIM(r.my_score), ''), '0')::NUMERIC(4,2),
-    NULLIF(BTRIM(r.my_status), '')::SMALLINT,
-
-    CASE
-        WHEN BTRIM(COALESCE(r.my_rewatching, '')) IN ('1', 'true', 'TRUE', 't') THEN TRUE
-        WHEN BTRIM(COALESCE(r.my_rewatching, '')) IN ('0', 'false', 'FALSE', 'f', '') THEN FALSE
-        ELSE NULL
-    END,
-
-    COALESCE(NULLIF(BTRIM(r.my_rewatching_ep), '')::INTEGER, 0),
-
-    CASE
-        WHEN BTRIM(COALESCE(r.my_last_updated, '')) ~ '^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$'
-         AND SUBSTRING(BTRIM(r.my_last_updated), 6, 2) <> '00'
-         AND SUBSTRING(BTRIM(r.my_last_updated), 9, 2) <> '00'
-        THEN BTRIM(r.my_last_updated)::TIMESTAMP
-        ELSE NULL
-    END
+    safe_bool(r.my_rewatching),
+    COALESCE(safe_int(r.my_rewatching_ep), 0),
+    safe_timestamp(r.my_last_updated)
 FROM raw_user_anime_list r
 JOIN users u
   ON u.username = NULLIF(BTRIM(r.username), '')
 JOIN anime a
-  ON a.anime_id = NULLIF(BTRIM(r.anime_id), '')::INTEGER
+  ON a.anime_id = safe_int(r.anime_id)
 ORDER BY
     u.user_id,
     a.anime_id,
-    CASE
-        WHEN BTRIM(COALESCE(r.my_last_updated, '')) ~ '^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$'
-         AND SUBSTRING(BTRIM(r.my_last_updated), 6, 2) <> '00'
-         AND SUBSTRING(BTRIM(r.my_last_updated), 9, 2) <> '00'
-        THEN BTRIM(r.my_last_updated)::TIMESTAMP
-        ELSE TIMESTAMP '1900-01-01'
-    END DESC;
+    COALESCE(safe_timestamp(r.my_last_updated), TIMESTAMP '1900-01-01') DESC;
 
+-- ---------------------------------------------------------
+-- 6) Dimension tables for multi-valued anime metadata
+-- ---------------------------------------------------------
 INSERT INTO genres (genre_name)
 SELECT DISTINCT BTRIM(token)
 FROM raw_anime ra
@@ -261,60 +557,103 @@ CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.licensor, ''), ',') AS toke
 WHERE BTRIM(token) <> ''
 ON CONFLICT (licensor_name) DO NOTHING;
 
+-- ---------------------------------------------------------
+-- 7) Junction tables
+-- ---------------------------------------------------------
 INSERT INTO anime_genres (anime_id, genre_id)
 SELECT DISTINCT
-    ra.anime_id::INTEGER,
+    a.anime_id,
     g.genre_id
 FROM raw_anime ra
+JOIN anime a
+  ON a.anime_id = safe_int(ra.anime_id)
 CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.genre, ''), ',') AS token
 JOIN genres g
   ON g.genre_name = BTRIM(token)
-WHERE BTRIM(token) <> '';
+WHERE BTRIM(token) <> ''
+ON CONFLICT DO NOTHING;
 
 INSERT INTO anime_studios (anime_id, studio_id)
 SELECT DISTINCT
-    ra.anime_id::INTEGER,
+    a.anime_id,
     s.studio_id
 FROM raw_anime ra
+JOIN anime a
+  ON a.anime_id = safe_int(ra.anime_id)
 CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.studio, ''), ',') AS token
 JOIN studios s
   ON s.studio_name = BTRIM(token)
-WHERE BTRIM(token) <> '';
+WHERE BTRIM(token) <> ''
+ON CONFLICT DO NOTHING;
 
 INSERT INTO anime_producers (anime_id, producer_id)
 SELECT DISTINCT
-    ra.anime_id::INTEGER,
+    a.anime_id,
     p.producer_id
 FROM raw_anime ra
+JOIN anime a
+  ON a.anime_id = safe_int(ra.anime_id)
 CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.producer, ''), ',') AS token
 JOIN producers p
   ON p.producer_name = BTRIM(token)
-WHERE BTRIM(token) <> '';
+WHERE BTRIM(token) <> ''
+ON CONFLICT DO NOTHING;
 
 INSERT INTO anime_licensors (anime_id, licensor_id)
 SELECT DISTINCT
-    ra.anime_id::INTEGER,
+    a.anime_id,
     l.licensor_id
 FROM raw_anime ra
+JOIN anime a
+  ON a.anime_id = safe_int(ra.anime_id)
 CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.licensor, ''), ',') AS token
 JOIN licensors l
   ON l.licensor_name = BTRIM(token)
-WHERE BTRIM(token) <> '';
+WHERE BTRIM(token) <> ''
+ON CONFLICT DO NOTHING;
 
-CREATE INDEX idx_user_anime_list_anime_id ON user_anime_list(anime_id);
-CREATE INDEX idx_user_anime_list_status_id ON user_anime_list(status_id);
-CREATE INDEX idx_users_username ON users(username);
-CREATE INDEX idx_anime_title ON anime(title);
-CREATE INDEX idx_anime_type ON anime(type);
-CREATE INDEX idx_anime_source ON anime(source);
-CREATE INDEX idx_anime_score ON anime(score);
-CREATE INDEX idx_anime_popularity ON anime(popularity);
-CREATE INDEX idx_anime_genres_genre_id ON anime_genres(genre_id);
-CREATE INDEX idx_anime_studios_studio_id ON anime_studios(studio_id);
-CREATE INDEX idx_anime_producers_producer_id ON anime_producers(producer_id);
-CREATE INDEX idx_anime_licensors_licensor_id ON anime_licensors(licensor_id);
+-- ---------------------------------------------------------
+-- 8) Helpful indexes
+-- ---------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_user_anime_list_anime_id
+    ON user_anime_list(anime_id);
+
+CREATE INDEX IF NOT EXISTS idx_user_anime_list_status_id
+    ON user_anime_list(status_id);
+
+CREATE INDEX IF NOT EXISTS idx_users_username
+    ON users(username);
+
+CREATE INDEX IF NOT EXISTS idx_anime_title
+    ON anime(title);
+
+CREATE INDEX IF NOT EXISTS idx_anime_type
+    ON anime(type);
+
+CREATE INDEX IF NOT EXISTS idx_anime_source
+    ON anime(source);
+
+CREATE INDEX IF NOT EXISTS idx_anime_score
+    ON anime(score);
+
+CREATE INDEX IF NOT EXISTS idx_anime_popularity
+    ON anime(popularity);
+
+CREATE INDEX IF NOT EXISTS idx_anime_genres_genre_id
+    ON anime_genres(genre_id);
+
+CREATE INDEX IF NOT EXISTS idx_anime_studios_studio_id
+    ON anime_studios(studio_id);
+
+CREATE INDEX IF NOT EXISTS idx_anime_producers_producer_id
+    ON anime_producers(producer_id);
+
+CREATE INDEX IF NOT EXISTS idx_anime_licensors_licensor_id
+    ON anime_licensors(licensor_id);
 
 ANALYZE;
+
+COMMIT;
 """
 
 # Step 6: run quick sanity checks
