@@ -213,14 +213,16 @@ CREATE TABLE anime_licensors (
 # Step 5: populate the final tables from the raw tables
 str5 = """
 -- =========================================================
--- STEP 5: Populate final tables from raw CSV-import tables
--- Safe against bad dates like 2010-01-00 / 0000-12-09
+-- STEP 5 (FAST VERSION)
+-- Assumes:
+--   1) raw_anime, raw_users, raw_user_anime_list already exist
+--   2) final schema from Step 4 already exists
 -- =========================================================
 
 BEGIN;
 
 -- ---------------------------------------------------------
--- 0) Clear final tables so this is rerunnable
+-- 0) Clear final tables so reruns are safe
 -- ---------------------------------------------------------
 TRUNCATE TABLE
     anime_licensors,
@@ -314,12 +316,10 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- require exact yyyy-mm-dd
     IF s !~ '^\d{4}-\d{2}-\d{2}$' THEN
         RETURN NULL;
     END IF;
 
-    -- reject fake year/month/day zeros
     IF SUBSTRING(s, 1, 4) = '0000'
        OR SUBSTRING(s, 6, 2) = '00'
        OR SUBSTRING(s, 9, 2) = '00' THEN
@@ -345,7 +345,6 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    -- reject year 0000 and month/day zero for leading date part
     IF LENGTH(s) >= 10 THEN
         IF SUBSTRING(s, 1, 4) = '0000'
            OR SUBSTRING(s, 6, 2) = '00'
@@ -361,7 +360,14 @@ END;
 $$;
 
 -- ---------------------------------------------------------
--- 2) Status lookup table
+-- 2) Stats for planner
+-- ---------------------------------------------------------
+ANALYZE raw_anime;
+ANALYZE raw_users;
+ANALYZE raw_user_anime_list;
+
+-- ---------------------------------------------------------
+-- 3) Status lookup
 -- ---------------------------------------------------------
 INSERT INTO anime_list_status (status_id, status_name) VALUES
     (1, 'watching'),
@@ -372,7 +378,7 @@ INSERT INTO anime_list_status (status_id, status_name) VALUES
 ON CONFLICT (status_id) DO NOTHING;
 
 -- ---------------------------------------------------------
--- 3) Anime table
+-- 4) Anime
 -- ---------------------------------------------------------
 INSERT INTO anime (
     anime_id,
@@ -439,7 +445,7 @@ FROM raw_anime
 WHERE safe_int(anime_id) IS NOT NULL;
 
 -- ---------------------------------------------------------
--- 4) Users table
+-- 5) Users
 -- ---------------------------------------------------------
 INSERT INTO users (
     user_id,
@@ -483,9 +489,51 @@ WHERE safe_int(user_id) IS NOT NULL
   AND NULLIF(BTRIM(username), '') IS NOT NULL;
 
 -- ---------------------------------------------------------
--- 5) User-anime interaction table
--- Keep only the latest row per (user_id, anime_id)
+-- 6) Build parsed interaction staging table once
+--    UNLOGGED makes it faster for one-time bulk loading
 -- ---------------------------------------------------------
+DROP TABLE IF EXISTS stage_user_anime_clean;
+
+CREATE UNLOGGED TABLE stage_user_anime_clean AS
+SELECT
+    NULLIF(BTRIM(r.username), '') AS username,
+    safe_int(r.anime_id) AS anime_id,
+    COALESCE(safe_int(r.my_watched_episodes), 0) AS my_watched_episodes,
+    safe_date(r.my_start_date) AS my_start_date,
+    safe_date(r.my_finish_date) AS my_finish_date,
+    CASE
+        WHEN safe_numeric(r.my_score) IS NULL THEN NULL
+        WHEN safe_numeric(r.my_score) = 0 THEN NULL
+        ELSE safe_numeric(r.my_score)::NUMERIC(4,2)
+    END AS my_score,
+    CASE
+        WHEN safe_int(r.my_status) IN (1,2,3,4,6) THEN safe_int(r.my_status)::SMALLINT
+        ELSE NULL
+    END AS status_id,
+    safe_bool(r.my_rewatching) AS my_rewatching,
+    COALESCE(safe_int(r.my_rewatching_ep), 0) AS my_rewatching_ep,
+    safe_timestamp(r.my_last_updated) AS my_last_updated
+FROM raw_user_anime_list r
+WHERE NULLIF(BTRIM(r.username), '') IS NOT NULL
+  AND safe_int(r.anime_id) IS NOT NULL;
+
+ANALYZE stage_user_anime_clean;
+
+-- Helpful for the join into users
+CREATE INDEX stage_user_anime_clean_username_idx
+    ON stage_user_anime_clean(username);
+
+CREATE INDEX stage_user_anime_clean_anime_id_idx
+    ON stage_user_anime_clean(anime_id);
+
+ANALYZE stage_user_anime_clean;
+
+-- ---------------------------------------------------------
+-- 7) Load interactions without global DISTINCT sort
+--    ON CONFLICT keeps the newest row per (user_id, anime_id)
+-- ---------------------------------------------------------
+SET LOCAL enable_nestloop = off;
+
 INSERT INTO user_anime_list (
     user_id,
     anime_id,
@@ -498,36 +546,43 @@ INSERT INTO user_anime_list (
     my_rewatching_ep,
     my_last_updated
 )
-SELECT DISTINCT ON (u.user_id, a.anime_id)
+SELECT
     u.user_id,
-    a.anime_id,
-    COALESCE(safe_int(r.my_watched_episodes), 0),
-    safe_date(r.my_start_date),
-    safe_date(r.my_finish_date),
-    CASE
-        WHEN safe_numeric(r.my_score) IS NULL THEN NULL
-        WHEN safe_numeric(r.my_score) = 0 THEN NULL
-        ELSE safe_numeric(r.my_score)::NUMERIC(4,2)
-    END,
-    CASE
-        WHEN safe_int(r.my_status) IN (1, 2, 3, 4, 6) THEN safe_int(r.my_status)::SMALLINT
-        ELSE NULL
-    END,
-    safe_bool(r.my_rewatching),
-    COALESCE(safe_int(r.my_rewatching_ep), 0),
-    safe_timestamp(r.my_last_updated)
-FROM raw_user_anime_list r
+    s.anime_id,
+    s.my_watched_episodes,
+    s.my_start_date,
+    s.my_finish_date,
+    s.my_score,
+    s.status_id,
+    s.my_rewatching,
+    s.my_rewatching_ep,
+    s.my_last_updated
+FROM stage_user_anime_clean s
 JOIN users u
-  ON u.username = NULLIF(BTRIM(r.username), '')
+  ON u.username = s.username
 JOIN anime a
-  ON a.anime_id = safe_int(r.anime_id)
-ORDER BY
-    u.user_id,
-    a.anime_id,
-    COALESCE(safe_timestamp(r.my_last_updated), TIMESTAMP '1900-01-01') DESC;
+  ON a.anime_id = s.anime_id
+ON CONFLICT (user_id, anime_id) DO UPDATE
+SET
+    my_watched_episodes = EXCLUDED.my_watched_episodes,
+    my_start_date       = EXCLUDED.my_start_date,
+    my_finish_date      = EXCLUDED.my_finish_date,
+    my_score            = EXCLUDED.my_score,
+    status_id           = EXCLUDED.status_id,
+    my_rewatching       = EXCLUDED.my_rewatching,
+    my_rewatching_ep    = EXCLUDED.my_rewatching_ep,
+    my_last_updated     = EXCLUDED.my_last_updated
+WHERE
+    user_anime_list.my_last_updated IS NULL
+    OR (
+        EXCLUDED.my_last_updated IS NOT NULL
+        AND EXCLUDED.my_last_updated > user_anime_list.my_last_updated
+    );
+
+DROP TABLE stage_user_anime_clean;
 
 -- ---------------------------------------------------------
--- 6) Dimension tables for multi-valued anime metadata
+-- 8) Dimension tables
 -- ---------------------------------------------------------
 INSERT INTO genres (genre_name)
 SELECT DISTINCT BTRIM(token)
@@ -558,7 +613,7 @@ WHERE BTRIM(token) <> ''
 ON CONFLICT (licensor_name) DO NOTHING;
 
 -- ---------------------------------------------------------
--- 7) Junction tables
+-- 9) Junction tables
 -- ---------------------------------------------------------
 INSERT INTO anime_genres (anime_id, genre_id)
 SELECT DISTINCT
@@ -613,7 +668,7 @@ WHERE BTRIM(token) <> ''
 ON CONFLICT DO NOTHING;
 
 -- ---------------------------------------------------------
--- 8) Helpful indexes
+-- 10) Secondary indexes
 -- ---------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_user_anime_list_anime_id
     ON user_anime_list(anime_id);
@@ -661,13 +716,10 @@ str6 = """
 SELECT COUNT(*) AS anime_count FROM anime;
 SELECT COUNT(*) AS user_count FROM users;
 SELECT COUNT(*) AS user_anime_count FROM user_anime_list;
-
 SELECT COUNT(*) AS genre_count FROM genres;
 SELECT COUNT(*) AS studio_count FROM studios;
 SELECT COUNT(*) AS producer_count FROM producers;
 SELECT COUNT(*) AS licensor_count FROM licensors;
-
-SELECT * FROM anime_list_status ORDER BY status_id;
 """
 
 # Reset ddl
