@@ -1,0 +1,5 @@
+pandas
+numpy
+kaggle
+python-dotenv
+jupyter
