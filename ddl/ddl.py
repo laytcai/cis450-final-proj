@@ -330,3 +330,21 @@ SELECT COUNT(*) AS licensor_count FROM licensors;
 
 SELECT * FROM anime_list_status ORDER BY status_id;
 """
+
+# Reset ddl
+str_reset = """
+TRUNCATE TABLE
+    anime_licensors,
+    anime_producers,
+    anime_studios,
+    anime_genres,
+    user_anime_list,
+    licensors,
+    producers,
+    studios,
+    genres,
+    anime_list_status,
+    users,
+    anime
+RESTART IDENTITY CASCADE;
+"""
