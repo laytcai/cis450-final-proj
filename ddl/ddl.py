@@ -212,18 +212,8 @@ CREATE TABLE anime_licensors (
 
 # Step 5: populate the final tables from the raw tables
 str5 = """
--- =========================================================
--- STEP 5 (FAST VERSION)
--- Assumes:
---   1) raw_anime, raw_users, raw_user_anime_list already exist
---   2) final schema from Step 4 already exists
--- =========================================================
-
 BEGIN;
 
--- ---------------------------------------------------------
--- 0) Clear final tables so reruns are safe
--- ---------------------------------------------------------
 TRUNCATE TABLE
     anime_licensors,
     anime_producers,
@@ -239,136 +229,66 @@ TRUNCATE TABLE
     anime
 RESTART IDENTITY CASCADE;
 
--- ---------------------------------------------------------
--- 1) Helper parsing functions
--- ---------------------------------------------------------
 CREATE OR REPLACE FUNCTION safe_numeric(txt TEXT)
-RETURNS NUMERIC
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-DECLARE
-    s TEXT;
+RETURNS NUMERIC LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE s TEXT;
 BEGIN
     s := NULLIF(BTRIM(txt), '');
-    IF s IS NULL THEN
-        RETURN NULL;
-    END IF;
-
+    IF s IS NULL THEN RETURN NULL; END IF;
     RETURN s::NUMERIC;
-EXCEPTION WHEN OTHERS THEN
-    RETURN NULL;
-END;
-$$;
+EXCEPTION WHEN OTHERS THEN RETURN NULL;
+END; $$;
 
 CREATE OR REPLACE FUNCTION safe_int(txt TEXT)
-RETURNS INTEGER
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-DECLARE
-    s TEXT;
+RETURNS INTEGER LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE s TEXT;
 BEGIN
     s := NULLIF(BTRIM(txt), '');
-    IF s IS NULL THEN
-        RETURN NULL;
-    END IF;
-
+    IF s IS NULL THEN RETURN NULL; END IF;
     RETURN TRUNC(s::NUMERIC)::INTEGER;
-EXCEPTION WHEN OTHERS THEN
-    RETURN NULL;
-END;
-$$;
+EXCEPTION WHEN OTHERS THEN RETURN NULL;
+END; $$;
 
 CREATE OR REPLACE FUNCTION safe_bool(txt TEXT)
-RETURNS BOOLEAN
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-DECLARE
-    s TEXT;
+RETURNS BOOLEAN LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE s TEXT;
 BEGIN
     s := LOWER(NULLIF(BTRIM(txt), ''));
-    IF s IS NULL THEN
-        RETURN NULL;
-    END IF;
-
-    IF s IN ('1', 't', 'true', 'y', 'yes') THEN
-        RETURN TRUE;
-    ELSIF s IN ('0', 'f', 'false', 'n', 'no') THEN
-        RETURN FALSE;
-    ELSE
-        RETURN NULL;
-    END IF;
-END;
-$$;
+    IF s IS NULL THEN RETURN NULL; END IF;
+    IF s IN ('1','t','true','y','yes') THEN RETURN TRUE;
+    ELSIF s IN ('0','f','false','n','no') THEN RETURN FALSE;
+    ELSE RETURN NULL; END IF;
+END; $$;
 
 CREATE OR REPLACE FUNCTION safe_date(txt TEXT)
-RETURNS DATE
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-DECLARE
-    s TEXT;
+RETURNS DATE LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE s TEXT;
 BEGIN
     s := NULLIF(BTRIM(txt), '');
-    IF s IS NULL THEN
-        RETURN NULL;
-    END IF;
-
-    IF s !~ '^\d{4}-\d{2}-\d{2}$' THEN
-        RETURN NULL;
-    END IF;
-
-    IF SUBSTRING(s, 1, 4) = '0000'
-       OR SUBSTRING(s, 6, 2) = '00'
-       OR SUBSTRING(s, 9, 2) = '00' THEN
-        RETURN NULL;
-    END IF;
-
+    IF s IS NULL THEN RETURN NULL; END IF;
+    IF s !~ '^\d{4}-\d{2}-\d{2}$' THEN RETURN NULL; END IF;
+    IF SUBSTRING(s,1,4)='0000' OR SUBSTRING(s,6,2)='00' OR SUBSTRING(s,9,2)='00' THEN RETURN NULL; END IF;
     RETURN s::DATE;
-EXCEPTION WHEN OTHERS THEN
-    RETURN NULL;
-END;
-$$;
+EXCEPTION WHEN OTHERS THEN RETURN NULL;
+END; $$;
 
 CREATE OR REPLACE FUNCTION safe_timestamp(txt TEXT)
-RETURNS TIMESTAMP
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-DECLARE
-    s TEXT;
+RETURNS TIMESTAMP LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE s TEXT;
 BEGIN
     s := NULLIF(BTRIM(txt), '');
-    IF s IS NULL THEN
-        RETURN NULL;
-    END IF;
-
+    IF s IS NULL THEN RETURN NULL; END IF;
     IF LENGTH(s) >= 10 THEN
-        IF SUBSTRING(s, 1, 4) = '0000'
-           OR SUBSTRING(s, 6, 2) = '00'
-           OR SUBSTRING(s, 9, 2) = '00' THEN
-            RETURN NULL;
-        END IF;
+        IF SUBSTRING(s,1,4)='0000' OR SUBSTRING(s,6,2)='00' OR SUBSTRING(s,9,2)='00' THEN RETURN NULL; END IF;
     END IF;
-
     RETURN s::TIMESTAMP;
-EXCEPTION WHEN OTHERS THEN
-    RETURN NULL;
-END;
-$$;
+EXCEPTION WHEN OTHERS THEN RETURN NULL;
+END; $$;
 
--- ---------------------------------------------------------
--- 2) Stats for planner
--- ---------------------------------------------------------
 ANALYZE raw_anime;
 ANALYZE raw_users;
 ANALYZE raw_user_anime_list;
 
--- ---------------------------------------------------------
--- 3) Status lookup
--- ---------------------------------------------------------
 INSERT INTO anime_list_status (status_id, status_name) VALUES
     (1, 'watching'),
     (2, 'completed'),
@@ -377,39 +297,12 @@ INSERT INTO anime_list_status (status_id, status_name) VALUES
     (6, 'plan_to_watch')
 ON CONFLICT (status_id) DO NOTHING;
 
--- ---------------------------------------------------------
--- 4) Anime
--- ---------------------------------------------------------
 INSERT INTO anime (
-    anime_id,
-    title,
-    title_english,
-    title_japanese,
-    title_synonyms,
-    image_url,
-    type,
-    source,
-    episodes,
-    status,
-    airing,
-    aired_string,
-    aired,
-    duration,
-    duration_min,
-    aired_from_year,
-    rating,
-    score,
-    scored_by,
-    rank,
-    popularity,
-    members,
-    favorites,
-    background,
-    premiered,
-    broadcast,
-    related,
-    opening_theme,
-    ending_theme
+    anime_id, title, title_english, title_japanese, title_synonyms,
+    image_url, type, source, episodes, status, airing, aired_string,
+    aired, duration, duration_min, aired_from_year, rating, score,
+    scored_by, rank, popularity, members, favorites, background,
+    premiered, broadcast, related, opening_theme, ending_theme
 )
 SELECT
     safe_int(anime_id),
@@ -444,27 +337,11 @@ SELECT
 FROM raw_anime
 WHERE safe_int(anime_id) IS NOT NULL;
 
--- ---------------------------------------------------------
--- 5) Users
--- ---------------------------------------------------------
 INSERT INTO users (
-    user_id,
-    username,
-    user_watching,
-    user_completed,
-    user_onhold,
-    user_dropped,
-    user_plantowatch,
-    user_days_spent_watching,
-    gender,
-    location,
-    birth_date,
-    access_rank,
-    join_date,
-    last_online,
-    stats_mean_score,
-    stats_rewatched,
-    stats_episodes
+    user_id, username, user_watching, user_completed, user_onhold,
+    user_dropped, user_plantowatch, user_days_spent_watching, gender,
+    location, birth_date, access_rank, join_date, last_online,
+    stats_mean_score, stats_rewatched, stats_episodes
 )
 SELECT
     safe_int(user_id),
@@ -488,63 +365,68 @@ FROM raw_users
 WHERE safe_int(user_id) IS NOT NULL
   AND NULLIF(BTRIM(username), '') IS NOT NULL;
 
--- ---------------------------------------------------------
--- 6) Build parsed interaction staging table once
---    UNLOGGED makes it faster for one-time bulk loading
--- ---------------------------------------------------------
+-- -------------------------------------------------------
+-- FAST staging table: inline SQL only, no PL/pgSQL calls
+-- -------------------------------------------------------
 DROP TABLE IF EXISTS stage_user_anime_clean;
 
 CREATE UNLOGGED TABLE stage_user_anime_clean AS
 SELECT
-    NULLIF(BTRIM(r.username), '') AS username,
-    safe_int(r.anime_id) AS anime_id,
-    COALESCE(safe_int(r.my_watched_episodes), 0) AS my_watched_episodes,
-    safe_date(r.my_start_date) AS my_start_date,
-    safe_date(r.my_finish_date) AS my_finish_date,
+    BTRIM(r.username) AS username,
+    TRUNC(r.anime_id::NUMERIC)::INTEGER AS anime_id,
+    COALESCE(TRUNC(r.my_watched_episodes::NUMERIC)::INTEGER, 0) AS my_watched_episodes,
     CASE
-        WHEN safe_numeric(r.my_score) IS NULL THEN NULL
-        WHEN safe_numeric(r.my_score) = 0 THEN NULL
-        ELSE safe_numeric(r.my_score)::NUMERIC(4,2)
+        WHEN r.my_start_date ~ '^\d{4}-\d{2}-\d{2}$'
+         AND SUBSTRING(r.my_start_date,1,4) <> '0000'
+         AND SUBSTRING(r.my_start_date,6,2) <> '00'
+         AND SUBSTRING(r.my_start_date,9,2) <> '00'
+        THEN r.my_start_date::DATE
+    END AS my_start_date,
+    CASE
+        WHEN r.my_finish_date ~ '^\d{4}-\d{2}-\d{2}$'
+         AND SUBSTRING(r.my_finish_date,1,4) <> '0000'
+         AND SUBSTRING(r.my_finish_date,6,2) <> '00'
+         AND SUBSTRING(r.my_finish_date,9,2) <> '00'
+        THEN r.my_finish_date::DATE
+    END AS my_finish_date,
+    CASE
+        WHEN r.my_score ~ '^\d+(\.\d+)?$'
+         AND r.my_score::NUMERIC > 0
+        THEN r.my_score::NUMERIC(4,2)
     END AS my_score,
     CASE
-        WHEN safe_int(r.my_status) IN (1,2,3,4,6) THEN safe_int(r.my_status)::SMALLINT
-        ELSE NULL
+        WHEN r.my_status ~ '^\d+$'
+         AND r.my_status::INTEGER IN (1,2,3,4,6)
+        THEN r.my_status::SMALLINT
     END AS status_id,
-    safe_bool(r.my_rewatching) AS my_rewatching,
-    COALESCE(safe_int(r.my_rewatching_ep), 0) AS my_rewatching_ep,
-    safe_timestamp(r.my_last_updated) AS my_last_updated
+    CASE
+        WHEN BTRIM(r.my_rewatching) IN ('1','t','true','y','yes') THEN TRUE
+        WHEN BTRIM(r.my_rewatching) IN ('0','f','false','n','no') THEN FALSE
+    END AS my_rewatching,
+    COALESCE(TRUNC(r.my_rewatching_ep::NUMERIC)::INTEGER, 0) AS my_rewatching_ep,
+    CASE
+        WHEN LENGTH(BTRIM(r.my_last_updated)) >= 10
+         AND SUBSTRING(BTRIM(r.my_last_updated),1,4) <> '0000'
+         AND SUBSTRING(BTRIM(r.my_last_updated),6,2) <> '00'
+         AND SUBSTRING(BTRIM(r.my_last_updated),9,2) <> '00'
+        THEN BTRIM(r.my_last_updated)::TIMESTAMP
+    END AS my_last_updated
 FROM raw_user_anime_list r
-WHERE NULLIF(BTRIM(r.username), '') IS NOT NULL
-  AND safe_int(r.anime_id) IS NOT NULL;
+WHERE BTRIM(r.username) <> ''
+  AND r.anime_id ~ '^\d+(\.\d+)?$';
 
 ANALYZE stage_user_anime_clean;
 
--- Helpful for the join into users
-CREATE INDEX stage_user_anime_clean_username_idx
-    ON stage_user_anime_clean(username);
-
-CREATE INDEX stage_user_anime_clean_anime_id_idx
-    ON stage_user_anime_clean(anime_id);
+CREATE INDEX stage_username_idx ON stage_user_anime_clean(username);
+CREATE INDEX stage_anime_id_idx ON stage_user_anime_clean(anime_id);
 
 ANALYZE stage_user_anime_clean;
 
--- ---------------------------------------------------------
--- 7) Load interactions without global DISTINCT sort
---    ON CONFLICT keeps the newest row per (user_id, anime_id)
--- ---------------------------------------------------------
 SET LOCAL enable_nestloop = off;
 
 INSERT INTO user_anime_list (
-    user_id,
-    anime_id,
-    my_watched_episodes,
-    my_start_date,
-    my_finish_date,
-    my_score,
-    status_id,
-    my_rewatching,
-    my_rewatching_ep,
-    my_last_updated
+    user_id, anime_id, my_watched_episodes, my_start_date, my_finish_date,
+    my_score, status_id, my_rewatching, my_rewatching_ep, my_last_updated
 )
 SELECT
     u.user_id,
@@ -558,12 +440,9 @@ SELECT
     s.my_rewatching_ep,
     s.my_last_updated
 FROM stage_user_anime_clean s
-JOIN users u
-  ON u.username = s.username
-JOIN anime a
-  ON a.anime_id = s.anime_id
-ON CONFLICT (user_id, anime_id) DO UPDATE
-SET
+JOIN users u ON u.username = s.username
+JOIN anime a ON a.anime_id = s.anime_id
+ON CONFLICT (user_id, anime_id) DO UPDATE SET
     my_watched_episodes = EXCLUDED.my_watched_episodes,
     my_start_date       = EXCLUDED.my_start_date,
     my_finish_date      = EXCLUDED.my_finish_date,
@@ -572,139 +451,88 @@ SET
     my_rewatching       = EXCLUDED.my_rewatching,
     my_rewatching_ep    = EXCLUDED.my_rewatching_ep,
     my_last_updated     = EXCLUDED.my_last_updated
-WHERE
-    user_anime_list.my_last_updated IS NULL
-    OR (
-        EXCLUDED.my_last_updated IS NOT NULL
-        AND EXCLUDED.my_last_updated > user_anime_list.my_last_updated
-    );
+WHERE user_anime_list.my_last_updated IS NULL
+   OR (EXCLUDED.my_last_updated IS NOT NULL
+       AND EXCLUDED.my_last_updated > user_anime_list.my_last_updated);
 
 DROP TABLE stage_user_anime_clean;
 
--- ---------------------------------------------------------
--- 8) Dimension tables
--- ---------------------------------------------------------
 INSERT INTO genres (genre_name)
 SELECT DISTINCT BTRIM(token)
-FROM raw_anime ra
-CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.genre, ''), ',') AS token
+FROM raw_anime
+CROSS JOIN LATERAL regexp_split_to_table(COALESCE(genre, ''), ',') AS token
 WHERE BTRIM(token) <> ''
 ON CONFLICT (genre_name) DO NOTHING;
 
 INSERT INTO studios (studio_name)
 SELECT DISTINCT BTRIM(token)
-FROM raw_anime ra
-CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.studio, ''), ',') AS token
+FROM raw_anime
+CROSS JOIN LATERAL regexp_split_to_table(COALESCE(studio, ''), ',') AS token
 WHERE BTRIM(token) <> ''
 ON CONFLICT (studio_name) DO NOTHING;
 
 INSERT INTO producers (producer_name)
 SELECT DISTINCT BTRIM(token)
-FROM raw_anime ra
-CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.producer, ''), ',') AS token
+FROM raw_anime
+CROSS JOIN LATERAL regexp_split_to_table(COALESCE(producer, ''), ',') AS token
 WHERE BTRIM(token) <> ''
 ON CONFLICT (producer_name) DO NOTHING;
 
 INSERT INTO licensors (licensor_name)
 SELECT DISTINCT BTRIM(token)
-FROM raw_anime ra
-CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.licensor, ''), ',') AS token
+FROM raw_anime
+CROSS JOIN LATERAL regexp_split_to_table(COALESCE(licensor, ''), ',') AS token
 WHERE BTRIM(token) <> ''
 ON CONFLICT (licensor_name) DO NOTHING;
 
--- ---------------------------------------------------------
--- 9) Junction tables
--- ---------------------------------------------------------
 INSERT INTO anime_genres (anime_id, genre_id)
-SELECT DISTINCT
-    a.anime_id,
-    g.genre_id
+SELECT DISTINCT a.anime_id, g.genre_id
 FROM raw_anime ra
-JOIN anime a
-  ON a.anime_id = safe_int(ra.anime_id)
+JOIN anime a ON a.anime_id = safe_int(ra.anime_id)
 CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.genre, ''), ',') AS token
-JOIN genres g
-  ON g.genre_name = BTRIM(token)
+JOIN genres g ON g.genre_name = BTRIM(token)
 WHERE BTRIM(token) <> ''
 ON CONFLICT DO NOTHING;
 
 INSERT INTO anime_studios (anime_id, studio_id)
-SELECT DISTINCT
-    a.anime_id,
-    s.studio_id
+SELECT DISTINCT a.anime_id, s.studio_id
 FROM raw_anime ra
-JOIN anime a
-  ON a.anime_id = safe_int(ra.anime_id)
+JOIN anime a ON a.anime_id = safe_int(ra.anime_id)
 CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.studio, ''), ',') AS token
-JOIN studios s
-  ON s.studio_name = BTRIM(token)
+JOIN studios s ON s.studio_name = BTRIM(token)
 WHERE BTRIM(token) <> ''
 ON CONFLICT DO NOTHING;
 
 INSERT INTO anime_producers (anime_id, producer_id)
-SELECT DISTINCT
-    a.anime_id,
-    p.producer_id
+SELECT DISTINCT a.anime_id, p.producer_id
 FROM raw_anime ra
-JOIN anime a
-  ON a.anime_id = safe_int(ra.anime_id)
+JOIN anime a ON a.anime_id = safe_int(ra.anime_id)
 CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.producer, ''), ',') AS token
-JOIN producers p
-  ON p.producer_name = BTRIM(token)
+JOIN producers p ON p.producer_name = BTRIM(token)
 WHERE BTRIM(token) <> ''
 ON CONFLICT DO NOTHING;
 
 INSERT INTO anime_licensors (anime_id, licensor_id)
-SELECT DISTINCT
-    a.anime_id,
-    l.licensor_id
+SELECT DISTINCT a.anime_id, l.licensor_id
 FROM raw_anime ra
-JOIN anime a
-  ON a.anime_id = safe_int(ra.anime_id)
+JOIN anime a ON a.anime_id = safe_int(ra.anime_id)
 CROSS JOIN LATERAL regexp_split_to_table(COALESCE(ra.licensor, ''), ',') AS token
-JOIN licensors l
-  ON l.licensor_name = BTRIM(token)
+JOIN licensors l ON l.licensor_name = BTRIM(token)
 WHERE BTRIM(token) <> ''
 ON CONFLICT DO NOTHING;
 
--- ---------------------------------------------------------
--- 10) Secondary indexes
--- ---------------------------------------------------------
-CREATE INDEX IF NOT EXISTS idx_user_anime_list_anime_id
-    ON user_anime_list(anime_id);
-
-CREATE INDEX IF NOT EXISTS idx_user_anime_list_status_id
-    ON user_anime_list(status_id);
-
-CREATE INDEX IF NOT EXISTS idx_users_username
-    ON users(username);
-
-CREATE INDEX IF NOT EXISTS idx_anime_title
-    ON anime(title);
-
-CREATE INDEX IF NOT EXISTS idx_anime_type
-    ON anime(type);
-
-CREATE INDEX IF NOT EXISTS idx_anime_source
-    ON anime(source);
-
-CREATE INDEX IF NOT EXISTS idx_anime_score
-    ON anime(score);
-
-CREATE INDEX IF NOT EXISTS idx_anime_popularity
-    ON anime(popularity);
-
-CREATE INDEX IF NOT EXISTS idx_anime_genres_genre_id
-    ON anime_genres(genre_id);
-
-CREATE INDEX IF NOT EXISTS idx_anime_studios_studio_id
-    ON anime_studios(studio_id);
-
-CREATE INDEX IF NOT EXISTS idx_anime_producers_producer_id
-    ON anime_producers(producer_id);
-
-CREATE INDEX IF NOT EXISTS idx_anime_licensors_licensor_id
-    ON anime_licensors(licensor_id);
+CREATE INDEX IF NOT EXISTS idx_user_anime_list_anime_id    ON user_anime_list(anime_id);
+CREATE INDEX IF NOT EXISTS idx_user_anime_list_status_id   ON user_anime_list(status_id);
+CREATE INDEX IF NOT EXISTS idx_users_username              ON users(username);
+CREATE INDEX IF NOT EXISTS idx_anime_title                 ON anime(title);
+CREATE INDEX IF NOT EXISTS idx_anime_type                  ON anime(type);
+CREATE INDEX IF NOT EXISTS idx_anime_source                ON anime(source);
+CREATE INDEX IF NOT EXISTS idx_anime_score                 ON anime(score);
+CREATE INDEX IF NOT EXISTS idx_anime_popularity            ON anime(popularity);
+CREATE INDEX IF NOT EXISTS idx_anime_genres_genre_id       ON anime_genres(genre_id);
+CREATE INDEX IF NOT EXISTS idx_anime_studios_studio_id     ON anime_studios(studio_id);
+CREATE INDEX IF NOT EXISTS idx_anime_producers_producer_id ON anime_producers(producer_id);
+CREATE INDEX IF NOT EXISTS idx_anime_licensors_licensor_id ON anime_licensors(licensor_id);
 
 ANALYZE;
 
