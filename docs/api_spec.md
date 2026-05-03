@@ -409,9 +409,12 @@ S5b
 ## 9. GET /api/anime/:id/recommendations — complex
 
 "Users who completed *this anime* with score ≥ 8 also completed ___ with
-score ≥ 7." Self-join on `user_anime_list`. **Intentionally slow on the full
-UAL**; this is one of the two queries whose optimization story (indexing +
-potentially materialized views) will be reported in M5.
+score ≥ 7." Originally a 3-way self-join on `user_anime_list` (~35s on the
+full UAL). Now served from the precomputed `anime_recommendations` table
+(top-50 co-viewers per popular seed, built by `build_anime_recs()` — see
+[`ddl/recommendations_mv.sql`](../ddl/recommendations_mv.sql)). Request-time
+cost is a single index lookup against `(seed_anime_id, co_viewers DESC)`
+plus a 50-row join into `anime`. Typical latency **<50 ms**.
 
 **Underlying query:** C7 ([`c7_recommendations.sql`](../server/src/queries/c7_recommendations.sql))
 
@@ -420,14 +423,14 @@ potentially materialized views) will be reported in M5.
 | Name | In | Type | Required | Description |
 |---|---|---|---|---|
 | `id` | path | integer > 0 | yes | Source anime |
-| `min_co_viewers` | query | integer `[1,10000]` | no | default 10 — `HAVING COUNT(*) >= ?` threshold |
+| `min_co_viewers` | query | integer `[1,10000]` | no | default 10 — additional floor on cached `co_viewers`. Cache build already enforces ≥ 50, so values ≤ 50 are no-ops |
 | `limit` | query | integer `[1,100]` | no | default 20 |
 
 **SQL params**
 
 | Placeholder | Request param |
 |---|---|
-| `$1` | `id` |
+| `$1` | `id` (matched against `anime_recommendations.seed_anime_id`) |
 | `$2` | `min_co_viewers` |
 | `$3` | `limit` |
 
@@ -439,6 +442,7 @@ potentially materialized views) will be reported in M5.
   "params": { "min_co_viewers": 10, "limit": 20 },
   "results": [
     { "anime_id": 11061, "title": "Hunter x Hunter (2011)",
+      "title_english": "Hunter x Hunter",
       "type": "TV", "mal_score": 9.09, "image_url": "...",
       "aired_from_year": 2011,
       "co_viewers": 48213, "avg_co_score": 9.12 }
@@ -448,8 +452,13 @@ potentially materialized views) will be reported in M5.
 
 | Field | Type | Description |
 |---|---|---|
-| `co_viewers` | integer | Users who completed both anime with scores meeting thresholds |
-| `avg_co_score` | number | Mean of co-viewers' score on the recommended anime |
+| `co_viewers` | integer | Cached count of users who completed both anime at the build-time score thresholds (seed ≥ 8, rec ≥ 7) |
+| `avg_co_score` | number | Cached mean score that those co-viewers gave the recommended anime |
+
+**Coverage caveat:** the cache only contains anime that had ≥ 200
+high-score viewers at build time. Obscure anime return an empty
+`results` array. To extend coverage, lower the threshold in
+`seed_anime_list` and rerun `CALL build_anime_recs()`.
 
 ---
 

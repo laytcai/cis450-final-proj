@@ -35,7 +35,25 @@ This is where the magic happens (`str5`). It's wrapped in a single PostgreSQL tr
 *   **Step 6 (`str6`)**: Executes sanity checks by running `COUNT(*)` queries on the final tables. This is helpful to rapidly verify data volumes.
 *   **Reset (`str_reset`)**: Truncates all tables in the final schema, allowing the ETL process to be easily retried.
 
+## Step 7: M5 Optimization Layer (`recommendations_mv.sql`)
+
+The base schema in `ddl.py` is enough to run every route correctly, but the C7 recommendations route (`/api/anime/:id/recommendations`) executes a 3-way self-join on `user_anime_list` that takes ~35 seconds on the full dataset. The companion script [`recommendations_mv.sql`](recommendations_mv.sql) installs a two-stage cache that brings it under 50 ms.
+
+Run it **once after `ddl.py` finishes**, and **rerun `CALL build_anime_recs();`** after any reload of `user_anime_list`.
+
+What it creates:
+
+1.  **`completed_high_score_lists`** — a materialized view of `user_anime_list` filtered to `status_id = 2 AND my_score >= 7`, with indexes on `(anime_id, user_id, my_score)` and `(user_id, anime_id, my_score)` so the recommendation self-join can be index-only in both directions. On its own this drops C7 from ~35 s to ~8.5 s.
+2.  **`seed_anime_list`** — the set of anime popular enough to precompute recommendations for (≥ 200 high-score viewers). Threshold is tunable; lower values give broader coverage at the cost of longer build time.
+3.  **`anime_recommendations`** — a precomputed table of top-50 co-viewed anime per seed, populated by the `build_anime_recs()` PL/pgSQL procedure. The procedure issues `COMMIT` per loop iteration so temp files clear continuously — an earlier all-pairs-in-one-shot variant exhausted RDS disk on the build step. Lookup index: `(seed_anime_id, co_viewers DESC)`.
+
+C7 ends up as a single index lookup plus a 50-row join into `anime` — well under 50 ms. The route handler and response shape are unchanged; only [`server/src/queries/c7_recommendations.sql`](../server/src/queries/c7_recommendations.sql) was rewritten as a cache read.
+
+**Coverage caveat:** anime not in `seed_anime_list` return `[]` from C7. The demo flow lands on popular anime, so this is fine; lower the threshold and rerun the procedure if broader coverage is needed.
+
+**DataGrip note:** the `CALL build_anime_recs()` step needs the console's `Tx` dropdown set to **Auto** (auto-commit), otherwise the procedure's per-iteration `COMMIT` errors out. In `psql` the default mode already works.
+
 ## Thoughts & Considerations
 
 *   **Database Engine:** The DDL uses features specific to PostgreSQL, like `plpgsql` language, sequence generation (`GENERATED ALWAYS AS IDENTITY`), array parsing (`regexp_split_to_table`), and `DISTINCT ON` clauses. 
-*   **Idempotency:** The process is designed so that the initial clearing (truncation) allows for you to run and re-run Step 5 continuously without suffering duplicate entries.
+*   **Idempotency:** The process is designed so that the initial clearing (truncation) allows for you to run and re-run Step 5 continuously without suffering duplicate entries. `recommendations_mv.sql` is similarly idempotent — it drops/recreates structural objects and uses `ON CONFLICT DO NOTHING` in the procedure so a cancelled build can be resumed by simply re-issuing `CALL build_anime_recs();`.

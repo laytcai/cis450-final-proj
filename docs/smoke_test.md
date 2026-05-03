@@ -150,18 +150,23 @@ Histogram always returns 10 buckets (missing ones have `n = 0`). This drives the
 
 ---
 
-## 8. `GET /api/anime/:id/recommendations` (C7 — ⚠️ slow)
+## 8. `GET /api/anime/:id/recommendations` (C7 — optimized)
 
 ```bash
-# This is the intentional "slow on full UAL" query — expect seconds, not ms
+# Post-opt: served from anime_recommendations cache, expect <100ms
 time curl -s "$API/api/anime/$ANIME_ID/recommendations?limit=10&min_co_viewers=5" | jq '.results | length'
 ```
 
-Expected: `{ anime_id, params, results: [...] }`. Each result row: `anime_id`, `title`, `mal_score`, `co_viewers`, `avg_co_score`.
+Expected: `{ anime_id, params, results: [...] }`. Each result row: `anime_id`, `title`, `title_english`, `type`, `mal_score`, `image_url`, `aired_from_year`, `co_viewers`, `avg_co_score`.
 
-**Note for M5:** record timing here *before* any optimization — this is the pre-opt number that goes into the optimization write-up.
+**Coverage:** the cache only contains anime that had ≥ 200 high-score viewers at build time. Obscure anime return `[]`. If `results` is empty, try a more popular anime_id (higher `scored_by`) — the demo flow lands on popular anime and is fully covered.
 
-If `results` is empty, try a more popular anime_id (higher `scored_by`) or drop `min_co_viewers` to 1.
+**M5 timing reference (anime_id 5114):**
+- Pre-opt baseline (raw 3-way self-join on full UAL): **~35 s**
+- Stage 1 (`completed_high_score_lists` MV only): **~8.5 s**
+- Stage 2 (CHSL + `anime_recommendations` cache, current): **<50 ms**
+
+Build/refresh: see [`ddl/recommendations_mv.sql`](../ddl/recommendations_mv.sql). Rerun `CALL build_anime_recs();` after each `user_anime_list` reload.
 
 ---
 
