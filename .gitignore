@@ -1,1 +1,4 @@
 raw_csv/
+.DS_Store
+preprocess/.DS_Store
+server/public/
