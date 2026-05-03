@@ -32,6 +32,19 @@ If `db` shows `unreachable`, double-check your `.env` and that your RDS security
 | `npm run dev` | Start with `nodemon` (auto-reload) |
 | `npm start` | Start once (production-style) |
 
+## Tests + coverage
+
+The unit and route test suite for this backend is **not** in this folder — it's under [`../test/server/`](../test/server) as a separate npm package so `server/` stays free of test dependencies. Tests use Vitest + Supertest, mock `pg` at module-resolution time (no RDS needed), and enforce a ≥80% coverage threshold for the rubric extra-credit item.
+
+```bash
+cd ../test/server
+npm install            # first time only
+npm test               # 93 tests
+npm run coverage       # tests + HTML/lcov report at test/server/coverage/
+```
+
+See [`test/server/README.md`](../test/server/README.md) for the full layout and how to add tests for new routes.
+
 ## Layout
 
 ```

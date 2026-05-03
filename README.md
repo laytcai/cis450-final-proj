@@ -10,6 +10,7 @@ Full-stack analytics app over a [MyAnimeList](https://myanimelist.net/) scrape �
 | ETL | Python 3 · `psycopg` · [`ddl/ddl.py`](ddl/ddl.py) |
 | Backend | Node 20 · Express · `pg` · parameterized raw SQL |
 | Frontend | Vite · React 18 · React Router 6 · Tailwind v3 · shadcn-style components · Recharts |
+| Tests | Vitest · `@vitest/coverage-v8` · Supertest (backend, ≥80% coverage threshold enforced) |
 | Docs | Markdown → `pandoc` → PDF for Gradescope |
 
 ## Repo tour
@@ -31,6 +32,8 @@ cis450-final-proj/
 │       ├── components/   # AnimeCard, SearchBar, Layout, Navbar, ui/*
 │       ├── hooks/        # useFetch with AbortController cleanup
 │       └── pages/        # Home, Browse, AnimeDetail, UserProfile, Compare, Trends, Studios
+├── test/
+│   └── server/             # Vitest + Supertest backend tests (own npm package, no DB needed)
 └── docs/
     ├── api_spec.md                  # API specification (one section per route)
     ├── smoke_test.md                # 12 curl checks against a populated DB
@@ -179,11 +182,29 @@ Once your backend and frontend are both running against a populated DB:
 
 ---
 
+## Tests + coverage
+
+Backend unit + route tests live in [`test/server/`](test/server) as a self-contained npm package — they don't touch `server/` and don't need RDS (the `pg` driver is replaced at resolution time with a stub).
+
+```bash
+cd test/server
+npm install            # first time only
+npm test               # 93 tests, no coverage
+npm run coverage       # tests + report (text + HTML at test/server/coverage/index.html)
+```
+
+Current backend coverage: **99.77% lines · 95.93% branches · 100% functions** — covers `middleware/`, all 7 route files, `db.js`, and `config.js`. `index.js` is excluded with a documented justification (entry-point `app.listen` + signal handlers). The 80% threshold is enforced; the test command fails the run if coverage drops below it. See [`test/server/README.md`](test/server/README.md) for layout, the mock pattern, and how to add tests for new routes.
+
+This satisfies the rubric **Extra Credit · "Code coverage (unit testing >80% for backend and/or >80% frontend)"** item.
+
+---
+
 ## Docs
 
 - [`docs/api_spec.md`](docs/api_spec.md) — REST API specification, one section per route.
 - [`docs/smoke_test.md`](docs/smoke_test.md) — `curl` checks for every route, in order.
 - [`docs/m4_submission_checklist.md`](docs/m4_submission_checklist.md) — pre-submission punch list.
+- [`test/server/README.md`](test/server/README.md) — backend test suite + coverage instructions.
 
 ## Troubleshooting
 
