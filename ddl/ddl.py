@@ -523,6 +523,7 @@ ON CONFLICT DO NOTHING;
 
 CREATE INDEX IF NOT EXISTS idx_user_anime_list_anime_id    ON user_anime_list(anime_id);
 CREATE INDEX IF NOT EXISTS idx_user_anime_list_status_id   ON user_anime_list(status_id);
+CREATE INDEX IF NOT EXISTS idx_ual_anime_score             ON user_anime_list(anime_id, my_score) WHERE my_score IS NOT NULL AND my_score > 0;
 CREATE INDEX IF NOT EXISTS idx_users_username              ON users(username);
 CREATE INDEX IF NOT EXISTS idx_anime_title                 ON anime(title);
 CREATE INDEX IF NOT EXISTS idx_anime_type                  ON anime(type);
