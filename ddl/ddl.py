@@ -81,6 +81,7 @@ CREATE TABLE raw_user_anime_list (
 
 # Step 4: create the final normalized schema
 str4 = """
+DROP MATERIALIZED VIEW IF EXISTS completed_high_score_lists;
 DROP TABLE IF EXISTS anime_licensors;
 DROP TABLE IF EXISTS anime_producers;
 DROP TABLE IF EXISTS anime_studios;
@@ -213,6 +214,8 @@ CREATE TABLE anime_licensors (
 # Step 5: populate the final tables from the raw tables
 str5 = """
 BEGIN;
+
+DROP MATERIALIZED VIEW IF EXISTS completed_high_score_lists;
 
 TRUNCATE TABLE
     anime_licensors,
@@ -534,6 +537,20 @@ CREATE INDEX IF NOT EXISTS idx_anime_studios_studio_id     ON anime_studios(stud
 CREATE INDEX IF NOT EXISTS idx_anime_producers_producer_id ON anime_producers(producer_id);
 CREATE INDEX IF NOT EXISTS idx_anime_licensors_licensor_id ON anime_licensors(licensor_id);
 
+CREATE MATERIALIZED VIEW completed_high_score_lists AS
+SELECT user_id, anime_id, my_score
+FROM user_anime_list
+WHERE status_id = 2
+  AND my_score >= 7;
+
+CREATE INDEX idx_chsl_anime_user_score
+ON completed_high_score_lists (anime_id, user_id, my_score);
+
+CREATE INDEX idx_chsl_user_anime_score
+ON completed_high_score_lists (user_id, anime_id, my_score);
+
+ANALYZE completed_high_score_lists;
+
 ANALYZE;
 
 COMMIT;
@@ -552,6 +569,8 @@ SELECT COUNT(*) AS licensor_count FROM licensors;
 
 # Reset ddl
 str_reset = """
+DROP MATERIALIZED VIEW IF EXISTS completed_high_score_lists;
+
 TRUNCATE TABLE
     anime_licensors,
     anime_producers,
